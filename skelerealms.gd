@@ -7,6 +7,7 @@ const WorldEntityPlugin = preload("res://addons/skelerealms/tools/world_entity_p
 const PointGizmo = preload("res://addons/skelerealms/tools/point_gizmo.gd")
 const ScheduleEditorPlugin = preload("res://addons/skelerealms/tools/schedule_editor_plugin.gd")
 const ConfigSyncPlugin = preload("res://addons/skelerealms/tools/config_sync_plugin.gd")
+const TagTrackerPlugin = preload("res://addons/skelerealms/tools/tag_system/tag_tracker_plugin.gd")
 
 ## Container we add the toolbar to
 const container = CONTAINER_SPATIAL_EDITOR_MENU
@@ -39,6 +40,7 @@ var we_plugin := WorldEntityPlugin.new()
 var point_gizmo := PointGizmo.new()
 var se_plugin := ScheduleEditorPlugin.new()
 var cs_plugin := ConfigSyncPlugin.new()
+var tt_plugin := TagTrackerPlugin.new()
 
 var se_w: Window
 var se: Control
@@ -58,6 +60,8 @@ func _enter_tree():
 	add_autoload_singleton("SaveSystem", "res://addons/skelerealms/scripts/system/save_system.gd")
 	add_autoload_singleton("CrimeMaster", "res://addons/skelerealms/scripts/crime/crime_master.gd")
 	add_autoload_singleton("DeviceNetwork", "res://addons/skelerealms/scripts/misc/device_network.gd")
+	# other
+	add_context_menu_plugin(EditorContextMenuPlugin.CONTEXT_SLOT_FILESYSTEM, tt_plugin)
 	
 	se_w = Window.new()
 	se = ScheduleEditorPlugin.ScheduleEditor.instantiate()
@@ -108,6 +112,8 @@ func _exit_tree():
 	remove_autoload_singleton("SaveSystem")
 	remove_autoload_singleton("CrimeMaster")
 	remove_autoload_singleton("DeviceNetwork")
+	# other
+	remove_context_menu_plugin(tt_plugin)
 
 	remove_control_from_container(container, utility)
 	remove_node_3d_gizmo_plugin(network_gizmo)
