@@ -3,10 +3,9 @@ extends Node
 ## World scene loader
 
 
-var world_paths:Dictionary = {}
-var regex:RegEx
 var loading_path:String
 var last_load_progress := 0 
+@onready var tag_tracker: SKTagTracker = (ResourceLoader.load(ProjectSettings.get_setting("skelerealms/config_path")) as SKConfig).tag_tracker
 
 
 ## Called when the loading process begins.
@@ -25,9 +24,6 @@ func _enter_tree() -> void:
 
 
 func _ready():
-	regex = RegEx.new()
-	regex.compile("([^\\/\n\\r]+)\\.t?scn") 
-	_cache_worlds(ProjectSettings.get_setting("skelerealms/worlds_path"))
 	GameInfo.is_loading = false
 
 
@@ -54,10 +50,10 @@ func _process(_delta: float) -> void:
 
 
 ## Load a new world.
-func load_world(wid:String) -> void:
+func load_world(wid: String) -> void:
 	print("loading world")
 	
-	if not world_paths.has(wid):
+	if not tag_tracker.is_name_world(wid):
 		push_error("World not found: %s" % wid)
 		return
 	
@@ -69,14 +65,15 @@ func load_world(wid:String) -> void:
 	GameInfo.is_loading = true
 	#await get_tree().process_frame
 	#print("processed frame. Unloading world...")
-	var e:Error = ResourceLoader.load_threaded_request(world_paths[wid], "PackedScene", true)
+	var path: String = ResourceUID.get_id_path(tag_tracker.get_uid_for_name(wid))
+	var e:Error = ResourceLoader.load_threaded_request(path, "PackedScene", true)
 	if not e == OK:
 		push_error("Load thread error: %d" % e)
 		_abort()
 		return
 	
 	last_load_progress = 0
-	loading_path = world_paths[wid]
+	loading_path = path
 	
 	_unload_world()
 
@@ -100,25 +97,3 @@ func _abort() -> void:
 	world_loading_ready.emit()
 	GameInfo.is_loading = false
 	GameInfo.game_loaded.emit()
-
-
-## Searches the worlds directory and caches filepaths, matching them to their name
-func _cache_worlds(path:String):
-	var dir = DirAccess.open(path)
-	if dir:
-		dir.list_dir_begin()
-		var file_name = dir.get_next()
-		while file_name != "":
-			if '.tscn.remap' in file_name:
-				file_name = file_name.trim_suffix('.remap')
-			if dir.current_is_dir(): # if is directory, cache subdirectory
-				_cache_worlds("%s/%s" % [path, file_name])
-			else: # if filename, cache filename
-				var result = regex.search(file_name)
-				if result:
-					world_paths[result.get_string(1)] = "%s/%s" % [path, file_name]
-			file_name = dir.get_next()
-		dir.list_dir_end()
-	
-	else:
-		print("An error occurred when trying to access the path.")

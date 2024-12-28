@@ -6,18 +6,13 @@ extends Node
 static var instance: SKEntityManager
 
 var entities: Dictionary = {}
-var disk_assets: Dictionary = {}  # TODO: Figure out an alternative that isn't so memory heavy
-var regex: RegEx
-
+@onready var tag_tracker: SKTagTracker = (ResourceLoader.load(ProjectSettings.get_setting("skelerealms/config_path")) as SKConfig).tag_tracker
 
 func _init() -> void:
 	instance = self
 
 
 func _ready():
-	regex = RegEx.new()
-	regex.compile("([^\\/\n\\r]+)\\.t?scn")
-	_cache_entities(ProjectSettings.get_setting("skelerealms/entities_path"))
 	SkeleRealmsGlobal.entity_manager_loaded.emit()
 
 
@@ -33,42 +28,21 @@ func get_entity(id: StringName) -> SKEntity:
 		(entities[id] as SKEntity).reset_stale_timer()  # FIXME: If another entity is carrying a reference to this entity, then we might break stuff by cleaning it up in this way?
 		return entities[id]
 	# stage 2: Check in save file
-	var potential_data = SaveSystem.entity_in_save(id)  # chedk the save system
+	var potential_data = SaveSystem.entity_in_save(id)  # check the save system
 	if potential_data.some():  # if found:
-		var e:SKEntity = add_entity_from_scene(ResourceLoader.load(disk_assets[id]))  # load default from disk
+		var e:SKEntity = add_entity_from_scene(ResourceLoader.load(ResourceUID.get_id_path(tag_tracker.get_uid_for_name(id))))  # load default from disk
 		e.load_data(potential_data.unwrap())  # and then load using the data blob we got from the save file
 		e.reset_stale_timer()
 		return e
 	# stage 3: check on disk
-	if disk_assets.has(id):
-		var e:SKEntity = add_entity_from_scene(ResourceLoader.load(disk_assets[id]))
+	if tag_tracker.is_name_entity(id):
+		var e:SKEntity = add_entity_from_scene(ResourceLoader.load(ResourceUID.get_id_path(tag_tracker.get_uid_for_name(id))))
 		e.generate() # generate, because the entity has never been seen before
 		e.reset_stale_timer()
 		return e 
 
 	# Other than that, we've failed. Attempt to find the entity in the child count as a failsave, then return none.
 	return get_node_or_null(id as String)
-
-
-func _cache_entities(path: String):
-	var dir = DirAccess.open(path)
-	if dir:
-		dir.list_dir_begin()
-		var file_name = dir.get_next()
-		while file_name != "":
-			if dir.current_is_dir():  # if is directory, cache subdirectory
-				_cache_entities("%s/%s" % [path, file_name])
-			else:  # if filename, cache filename
-				if ".remap" in file_name:
-					file_name = file_name.trim_suffix(".remap")
-				var result = regex.search(file_name)
-				if result:
-					disk_assets[result.get_string(1)] = "%s/%s" % [path, file_name]  # TODO: Check if it's actually an InstanceData
-			file_name = dir.get_next()
-		dir.list_dir_end()
-
-	else:
-		print("An error occurred when trying to access the path.")
 
 
 # add a new entity.
