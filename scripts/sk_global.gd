@@ -10,6 +10,8 @@ var world_states:Dictionary
 var status_effects:Dictionary = {}
 ## The SKConfig resource. 
 var config:SKConfig 
+## The current character slot being played.
+var current_character: int = 0
 
 ## Called when the [SKEntityManager] has finished loading.
 signal entity_manager_loaded

@@ -2,6 +2,13 @@ extends Node
 ## The savegame system.
 ## This should be autoloaded.
 
+const DEBUG_JSON := false
+const ENTITY_EXT := ".entity"
+const WORLD_EXT := ".world"
+const GAME_INFO_EXT := ".game"
+const SAVE_FILE_EXT := ".save"
+const GAME_INFO_GROUP := &"savegame gameinfo"
+const OTHER_GROUP := &"savegame other"
 
 ## Called when the savegame is complete.
 ## Use this to, for example, freeze the game until complete, or tell the netity manager to clean up stale entities.
@@ -9,123 +16,170 @@ signal save_complete
 ## Called when the loading process is complete. See [signal save_complete].
 signal load_complete
 
+var active_save_file: ZIPReader:
+	set(val):
+		if active_save_file:
+			active_save_file.close()
+		active_save_file = val
+
 
 ## Save the game and write it to user://saves directory.
-func save():
-	var save_data = {
-		"game_info" : {}, # info about the game, like playtime, quests, etc
-		"entity_data" : {}, # savegame info from entities
-		"other_data" : {} # anything else
-	}
-
-	# collect savegame data from entities
-	for sd in get_tree().get_nodes_in_group("savegame_entity"):
-		save_data["entity_data"][sd.name] = sd.save()
-	# collect savegame data from game info
-	for sd in get_tree().get_nodes_in_group("savegame_gameinfo"):
-		save_data["game_info"][sd.name] = sd.save()
-	# collect anything else
-	for sd in get_tree().get_nodes_in_group("savegame_other"):
-		save_data["other_data"][sd.name] = sd.save()
-
-	# attempt merge with old data, so we still keep the info about entities that aren't being tracked right now.
-	var old_file = _get_most_recent_savegame() # my getting the most recent, which was also merged like this, we accumulate info
-	if old_file.some(): # we will only merge if there is something to merge with
-		var old_data:Dictionary = _deserialize(FileAccess.open(old_file.unwrap(), FileAccess.READ).get_as_text()) # deserialize old data
-		old_data.merge(save_data, true) # merge, taking care to overwrite to keep info up to date
-		save_data = old_data # bit funky but I'm lazy
-
-	var save_text:String = _serialize(save_data) # serialize
-
-	DirAccess.make_dir_recursive_absolute("user://saves/")
-	# TODO: allow for custom save file names
-	# Create savegame file
-	var file = FileAccess.open("user://saves/%s.dat" % Time.get_datetime_string_from_system().replace(":", ""), FileAccess.WRITE)
-	file.store_string(save_text)
-	# I think these two are redundant but I wanna be safe
-	file.flush()
-	file.close()
+func save(character: int):
+	var file_path: String = _get_most_recent_savegame(character)
+	if file_path.is_empty():
+		file_path = _generate_save_file_name() # Create a new file if there wasn't one already
+	
+	var packer := ZIPPacker.new()
+	packer.open(file_path)
+	#1: Entities
+	var entities: Array[SKEntity] = SKEntityManager.instance.entities.values()
+	_save_entites(packer, entities)
+	#2: Game info
+	var info_nodes: Array[Node] = get_tree().get_nodes_in_group(GAME_INFO_GROUP)
+	save_all_game_info(packer, info_nodes)
+	#3: World
+	#4: Erased entities
+	#5: Other
+	var other_nodes: Array[Node] = get_tree().get_nodes_in_group(OTHER_GROUP)
+	save_all_other(packer, other_nodes)
+	
+	packer.close()
+	
+	active_save_file = ZIPReader.new()
+	active_save_file.open(file_path)
+	
 	save_complete.emit()
 
 
+func cleanup() -> void:
+	active_save_file = null # close save file
+
+
 ## Load the most recent savegame, if applicable.
-func load_most_recent():
-	var most_recent = _get_most_recent_savegame()
+func load_most_recent(character: int):
+	var most_recent: String = _get_most_recent_savegame(character)
 	# only load most recent if there are some
-	if most_recent.some():
-		load_game(most_recent.unwrap())
+	if not most_recent.is_empty():
+		load_game(most_recent)
 
 
 ## Load a game from a filepath.
-func load_game(path:String):
-	var file = FileAccess.open(path, FileAccess.READ) # open file
-	var data_blob:String = file.get_as_text() # read file
-	var save_data:Dictionary = _deserialize(data_blob) # parse data
-
-	# Reset to default state if it doesn't have an entry in the save data
-	for e in SKEntityManager.instance.entities:
-		if not save_data["entity_data"].has(e):
-			SKEntityManager.instance.entities[e].reset_data()
-	# load entity data - loop through all data, get entity (spawning it if it isn't there), call load
-	for data in save_data["entity_data"]:
-		SKEntityManager.instance.get_entity(data).load_data(save_data["entity_data"][data])
-
-	# load game info data
-	for si in get_tree().get_nodes_in_group("savegame_gameinfo"):
-		if save_data["game_info"].has(si.name):
-			si.load_data(save_data["game_info"][si.name])
-		else:
-			si.reset_data()
-
-	# load others data
-	for so in get_tree().get_nodes_in_group("savegame_other"):
-		if save_data["other_data"].has(so.name):
-			so.load_data(save_data["other_data"][so.name])
-		else:
-			so.reset_data()
+func load_game(path: String):
+	pass
 
 
 ## Check if an entity is accounted for in the save system. Returns the save data blob if there is, else none.
 ## Use sparingly; could get memory intensive.
-func entity_in_save(ref_id:String) -> Option:
-	var most_recent = _get_most_recent_savegame() # get most recent filepath
-	# if there was no recent save, it isn't here
-	if not most_recent.some():
-		return Option.none()
-	# deserialize
-	var deserialized_data:Dictionary = _deserialize(FileAccess.open(most_recent.unwrap(), FileAccess.READ).get_as_text())
-	if deserialized_data["entity_data"].has(ref_id):
-		# if the data has it, return the blob
-		return Option.from(deserialized_data["entity_data"][ref_id])
-	else:
-		# else, it's not here.
-		return Option.none()
+func entity_in_save(ref_id: StringName) -> Dictionary:
+	if not active_save_file:
+		return {}
+	var file_name: String = "%s%s" % [ref_id, ENTITY_EXT]
+	if active_save_file.file_exists(file_name):
+		return {}
+
+	var bytes: PackedByteArray = active_save_file.read_file(file_name)
+
+	return _deserialize(bytes)
 
 
 ## Gets the filepath for the most recent savegame. It is sorted by file modification time.
-func _get_most_recent_savegame() -> Option:
-	if not DirAccess.dir_exists_absolute("user://saves/"):
-		return Option.none()
+func _get_most_recent_savegame(character: int) -> String:
+	var save_dir: String = "user://saves/%d/" % character
+	if not DirAccess.dir_exists_absolute(save_dir):
+		return ""
 
-	var dir_files:Array[String] = []
-	dir_files.append_array(DirAccess.get_files_at("user://saves/"))
+	var dir_files: Array[String] = []
+	dir_files.append_array(DirAccess.get_files_at(save_dir))
 	# if no saves, we got none
 	if dir_files.is_empty():
-		return Option.none()
+		return ""
 	# sort by modified time
-	dir_files.sort_custom(func(a:String, b:String): return FileAccess.get_modified_time("user://saves/%s" % a) < FileAccess.get_modified_time("user://saves/%s" % b))
-	var most_recent_file:String = dir_files.pop_back()
+	dir_files.sort_custom(func(a: String, b: String) -> bool: return FileAccess.get_modified_time(save_dir + a) < FileAccess.get_modified_time(save_dir + b))
+	var most_recent_file: String = dir_files.pop_back()
 	# format
-	return Option.from("user://saves/%s" % most_recent_file)
+	return save_dir + most_recent_file
 
 
 ## Turn the save game blob into a string.
-## You can change this to use whatever system you want. By default, it uses JSON because that comes with Godot.
-func _serialize(data:Dictionary) -> String:
-	return JSON.stringify(data, "\t" if ProjectSettings.get_setting("skelerealms/savegame_indents") else "", true, true)
+func _serialize(data: Dictionary) -> PackedByteArray:
+	if DEBUG_JSON:
+		return JSON.stringify(data, "\t" if ProjectSettings.get_setting("skelerealms/savegame_indents") else "", true, true).to_utf8_buffer()
+	else:
+		return var_to_bytes_with_objects(data)
 
 
 ## Turn a string into a data blob.
 ## Like with [method _serialize], you can write your own.
-func _deserialize(text:String) -> Dictionary:
-	return JSON.parse_string(text)
+func _deserialize(text: PackedByteArray) -> Dictionary:
+	if DEBUG_JSON:
+		return JSON.parse_string(text.get_string_from_utf8())
+	else:
+		return bytes_to_var_with_objects(text)
+
+
+func _create_entity_file(handle: ZIPPacker, rid: StringName, data: Dictionary) -> void:
+	var bytes: PackedByteArray = _serialize(data)
+	var file_name: String = "%s%s" % [rid, ENTITY_EXT]
+
+	handle.start_file(file_name)
+	handle.write_file(bytes)
+	handle.close_file()
+
+
+func _save_entites(handle: ZIPPacker, entities: Array[SKEntity]) -> void:
+	for e: SKEntity in entities:
+		_create_entity_file(handle, e.name, e.save())
+
+
+func _save_game_info(zip_handle: ZIPPacker, id: StringName, data: Dictionary) -> void:
+	var bytes: PackedByteArray = _serialize(data)
+	var file_name: String = "%s%s" % [id, GAME_INFO_EXT]
+
+	zip_handle.start_file(file_name)
+	zip_handle.write_file(bytes)
+	zip_handle.close_file()
+
+
+func save_all_game_info(zip_handle: ZIPPacker, objects: Array[Node]) -> void:
+	for n: Node in objects:
+		_save_game_info(zip_handle, n.name, n.save())
+
+
+func _save_other(zip_handle: ZIPPacker, id: StringName, data: Dictionary) -> void:
+	var bytes: PackedByteArray = _serialize(data)
+	var file_name: String = "%s%s" % [id, OTHER_GROUP]
+
+	zip_handle.start_file(file_name)
+	zip_handle.write_file(bytes)
+	zip_handle.close_file()
+
+
+func save_all_other(zip_handle: ZIPPacker, objects: Array[Node]) -> void:
+	for n: Node in objects:
+		_save_other(zip_handle, n.name, n.save())
+
+
+func open_file_for_saving(path: String) -> ZIPPacker:
+	var zip := ZIPPacker.new()
+	zip.open(path, ZIPPacker.APPEND_ADDINZIP)
+	return zip
+
+
+func open_file_for_loading(path: String) -> ZIPReader:
+	var zip := ZIPReader.new()
+	zip.open(path)
+	return zip
+
+
+func _generate_save_file_name() -> String:
+	return "%s%s" % [Time.get_datetime_string_from_system(), SAVE_FILE_EXT]
+
+
+func save_world(handle: ZIPPacker, world: StringName, rids: Array) -> void:
+	var casted_rids := Array(rids, TYPE_STRING_NAME, &"", null)
+	var bytes: PackedByteArray = var_to_bytes(casted_rids)
+	var file_name: String = "%s%s" % [world, WORLD_EXT]
+
+	handle.start_file(file_name)
+	handle.write_file(bytes)
+	handle.close_file()
