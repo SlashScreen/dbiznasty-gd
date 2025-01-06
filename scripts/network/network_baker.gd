@@ -121,7 +121,7 @@ func bake() -> CoarseNetwork:
 	# Stage 5 - Build network
 	
 	var coarse_network := CoarseNetwork.new()
-	var compressed_connections := PackedInt32Array()
+	var compressed_connections := PackedInt64Array()
 	for c: Connection in connections:
 		compressed_connections.append(c.a)
 		compressed_connections.append(c.b)
@@ -140,8 +140,8 @@ func bake() -> CoarseNetwork:
 ## This works by simply pathfinding around portals. But what if 2 portals in the same world cannot be pathfinded between in the same world?
 ## Instead of pathfinding through the world, it ignores the world entirely, and only needs to know *whether* portal A can be reached from portal B or not. This is calculated here
 ## at bake time. This was inspired by a [pathfinding optimization done in Factorio](https://factorio.com/blog/post/fff-317).
-func analyze_portals(points: PackedVector3Array, portals: PackedInt32Array, node_connections: Array[Connection]) -> PackedInt32Array:
-	var portal_connections := PackedInt32Array()
+func analyze_portals(points: PackedVector3Array, portals: PackedInt64Array, node_connections: Array[Connection]) -> PackedInt64Array:
+	var portal_connections := PackedInt64Array()
 	# set up astar
 	var astar := AStar3D.new()
 	astar.reserve_space(points.size())
